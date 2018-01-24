@@ -1,0 +1,433 @@
+---
+title: "Hackathon2-Sberbank Russian Housing Market Data Analysis and Visuvalization"
+author: "shashikant dewangan"
+date: "18 January 2018"
+output: html_document
+---
+
+```{r}
+library(data.table)# read data with fread()
+library(tidyverse)# packages that work in harmony
+library(lubridate)#Make Dealing with Dates a Little Easier
+library(scales)#for automatically determining breaks and labels
+library(corrplot)# for correlation
+library(DT)#Wrapper of the JavaScript Library 'DataTables'
+
+```
+
+```{r}
+train <- fread("file:///C:/Users/Administrator/Desktop/Kaggle/pucho1/train.csv")
+colnames(train)
+str(train)
+```
+EDA : Missing Data 
+```{r}
+
+miss_value=sort(colSums(is.na(train)))
+miss_value <- miss_value[miss_value>0]
+data.frame(miss=miss_value, var=names(miss_value), row.names=NULL) %>%
+    ggplot(aes(x=reorder(var, -miss), y=miss)) + 
+    geom_bar(stat='identity', fill='mediumvioletred') +
+    labs(x='', y='percent missing', title='Percent missing data by feature') +
+    theme(axis.text.x=element_text(angle=90, hjust=1))
+
+train$state[which(is.na(train$state))] <- 2 # mode value
+train$build_year[which(is.na(train$build_year))] <- 2014 # mode value
+```
+Corelation between Numeric Columns
+```{r}
+cor_values <- c('full_sq', 'life_sq', 'floor', 'max_floor', 'build_year', 'num_room', 
+                    'kitch_sq', 'state', 'price_doc')
+
+corrplot(cor(train[, ..cor_values], use="complete.obs"))
+
+
+# Here Price and size of Home highly corelated
+ggplot(aes(x=full_sq, y=price_doc), data=train) + 
+    geom_point(color='steelblue3')
+```
+There is an outlier in full_sq. Its not clear whether this is an entry error. For now, remove it.
+
+```{r}
+train %>% 
+    filter(full_sq < 2000) %>%
+    ggplot(aes(x=full_sq, y=price_doc)) + 
+    geom_point(color='steelblue3', alpha=0.5) +
+    labs(x='Area', y='Price', title='Price by area in sq meters')
+```
+Analysisig The Count by Room in a House
+
+```{r}
+ggplot(aes(x=num_room), data=train) + 
+    geom_histogram(fill='slateblue', bins=20) + 
+    ggtitle('Distribution of room count')
+```
+Sale Distribution of Home by a inverter 
+```{r}
+ggplot(aes(x=price_doc), data=train) + 
+    geom_density(fill='royalblue3', color='gray10') + 
+    facet_grid(~product_type) + 
+    scale_x_continuous(trans='log')
+```
+
+House Build Year Wise
+```{r}
+table(train$build_year)
+
+train %>% 
+    filter(build_year > 1691 & build_year < 2018) %>% 
+    ggplot(aes(x=build_year)) + 
+    geom_histogram(fill='brown1') + 
+    ggtitle('Distribution of build year')
+
+```
+Mean Price by Year of build
+```{r}
+train %>% 
+    filter(build_year > 1691 & build_year < 2018) %>%
+    group_by(build_year) %>% 
+    summarize(mean_build_price=mean(price_doc)) %>%
+    ggplot(aes(x=build_year, y=mean_build_price)) +
+    geom_line(stat='identity', color='red3') + 
+    geom_smooth(color='darkgrey') +
+    ggtitle('Mean price by year of build')
+```
+Timestamp How does the sale price vary over the time horizon of the data set? Here I just group by the day and calculate the median price for each day and plot it over time.
+
+```{r}
+train$timestamp <- as.Date(train$timestamp)
+
+train %>%
+    group_by(timestamp) %>%
+    summarize(med_price = median(price_doc)) %>%
+    ggplot(aes(x = timestamp, y = med_price)) +
+    geom_line(color = 'tomato2') +
+    geom_smooth(method = 'lm', color = 'slateblue4', alpha = 0.7) + 
+    ggtitle('Daily median price over time')
+```
+And to compare with the above plot, here is the volume of sales over the same time.
+```{r}
+train %>%
+    group_by(timestamp) %>%
+    summarize(n = n()) %>%
+    ggplot(aes(x = timestamp, y = n)) +
+    geom_bar(stat = 'identity') + 
+    labs(x='', y='Number of transactions', title='Sales volume over  the time')
+```
+
+Checking is there a seasonal component to home prices in the course of a year?
+```{r}
+train %>% 
+    mutate(month=month(timestamp)) %>%
+    group_by(month) %>% 
+    summarize(med_price=median(price_doc)) %>%
+    ggplot(aes(x=as.integer(month), y=med_price)) +
+    geom_line(color='salmon', stat='identity') + 
+    geom_point(color='red', size=2) + 
+    scale_x_continuous(breaks=seq(1,12,1)) + 
+    labs(x='Month', title='Price by month of year')
+```
+Home State/Material 
+How do homes vary in price by condition
+```{r}
+train %>% 
+filter(!is.na(state)) %>% 
+    ggplot(aes(x=as.factor(state), y=log10(price_doc))) + 
+    geom_jitter(color='grey', alpha=0.2) + 
+    geom_violin(fill='red', alpha=0.7) +
+    ggtitle('Log10 of median price by state of home')
+```
+tha state 4 has the highest sale price on average. Significantly fewer homes fall under this category however
+```{r}
+train %>%
+    filter(!is.na(state)) %>%
+    group_by(state) %>%
+    summarize(mean(price_doc))
+```
+
+Material Future
+```{r}
+table(train$material)
+```
+It's unclear what these values mean since this feature is not described in the data dictionary. Material 1 is by far the most common. Only one home is classifed as material 3. How does median price compare among these six materials
+```{r}
+
+train %>%
+    filter(!is.na(material)) %>% 
+    ggplot(aes(x=as.factor(material), y=log(price_doc))) + 
+    geom_jitter(alpha=0.4, color='royalblue1') + 
+    geom_violin(fill='red', color='red',  alpha=0.6) + 
+    ggtitle('Distribution of price by build material')
+```
+Floor of Home
+How does the floor feature compare with price 
+According to the correlation plot from earlier, there is a moderate positive correlation.
+```{r}
+ggplot(aes(x=floor, y=log(price_doc)), data=train) + 
+      geom_point(color='orchid3', alpha=0.4) + 
+    geom_smooth(method='lm', color='darkgrey') + 
+    ggtitle('Price by floor of home')
+```
+On a whole, price seems to rise with the floor, although the effect is pretty small. Along the same lines, I wonder if the height of building is correlated with price. Well look at this using max_floor as a proxy for height.
+```{r}
+ggplot(aes(x=max_floor, y=log(price_doc)), data=train) + 
+    geom_point(color='red4', alpha=0.4) + 
+    geom_smooth(method='lm', color='darkgrey')
+```
+Let's check the quality of the data and see if floor is greater than max_floor for any observations:
+ 
+```{r}
+ggplot(aes(x=floor, y=max_floor), data=train) + 
+    geom_point(color='palegreen4') + 
+    geom_abline(slope=1, intercept=0, color='grey')
+```
+The observations below the grey identity line have a floor greater than the number of floors in the building. That's not good. How many are there?
+```{r}
+train %>%
+    select(id, floor, max_floor) %>%
+    filter(floor > max_floor) %>%
+    datatable()
+```
+Demographic Characteristics
+Now let's move beyond the internal home characteristics and take a look at some of the basic demographic and geographic characteristics. First, the correlation plot.
+```{r}
+demo_vars <- c('area_m', 'raion_popul', 'full_all', 'male_f', 'female_f', 'young_all', 
+               'young_female', 'work_all', 'work_male', 'work_female', 'price_doc')
+
+corrplot(cor(train[, ..demo_vars], use='complete.obs'))
+```
+
+```{r}
+# How many unique districts are there in sub area?
+length(unique(train$sub_area))
+```
+calculate population density and check to see if its correlated with price
+```{r}
+train %>% 
+    mutate(area_km=area_m/1000000, density=raion_popul/area_km) %>%
+    select(sub_area, density, price_doc) %>%
+    group_by(sub_area) %>%
+    summarize(density=median(density), med_price=median(price_doc)) %>% 
+    ggplot(aes(x=density, y=med_price)) +
+    geom_point(color='grey') + 
+    geom_smooth(method='lm', color='red2') + 
+    ggtitle('Median home price by raion population density (people per sq. km)')
+```
+
+These density numbers seem to make sense given that the population density of Moscow as a whole is 8,537/sq km. There are a few raions that seem to have a density of near zero, which seems odd. Home price does seem to increase with population density.
+```{r}
+train %>% 
+    group_by(sub_area) %>%
+    summarize(n=n()) %>%
+    ggplot(aes(x=reorder(sub_area, n), y=n)) + 
+    geom_bar(stat='identity') + 
+    coord_flip() +
+    labs(y='Number of transactions', x='', title='Number of Transactions by District')
+```
+Poselenie Sosenskoe, Nekrasovka, Poselenie Vnukovskoe had the most transactions in the data set by a fairly large margin.
+
+I wonder if there is a relationship between the share of the population that is working age and price.
+```{r}
+train %>% 
+    mutate(work_share=work_all/raion_popul) %>%
+    group_by(sub_area) %>%
+    summarize(mean_price=mean(price_doc), work_share=mean(work_share)) %>% 
+    ggplot(aes(x=work_share, y=mean_price)) + 
+    geom_point(color='indianred3') + 
+    geom_smooth(color='gray') + 
+    ggtitle('District mean home price by share of working age population')
+```
+In the US, school quality is one of the primary determinants of home values.
+```{r}
+school_chars <- c('children_preschool', 'preschool_quota', 'preschool_education_centers_raion',
+                  'children_school', 'school_quota', 'school_education_centers_raion', 
+                  'school_education_centers_top_20_raion', 'university_top_20_raion',
+                  'additional_education_raion', 'additional_education_km', 'university_km',
+                  'price_doc')
+
+corrplot(cor(train[, ..school_chars], use='complete.obs'))
+```
+ there is little to no correlation between price and the school variables. The school variables however are highly correlated with each other, indicating that we would not want to use all of them in a linear regression model due to multicollinearity.
+```{r}
+table(train$university_top_20_raion)
+
+train %>%
+    ggplot(aes(x=as.factor(university_top_20_raion), y=price_doc)) + 
+    geom_jitter(color='grey') + 
+    geom_boxplot(fill='firebrick1', color='gray', alpha=0.5) + 
+    ggtitle('Distribution of home price by # of top universities in Raion')
+```
+adding a lot more to this section soon. Please check back
+```{r}
+unique(train %>% filter(university_top_20_raion==3) %>% select(sub_area))
+
+
+cult_chars <- c('sport_objects_raion', 'culture_objects_top_25_raion', 'shopping_centers_raion',                        'park_km', 'fitness_km', 'swim_pool_km', 'ice_rink_km','stadium_km', 'basketball_km',                   'shopping_centers_km', 'big_church_km','church_synagogue_km', 'mosque_km', 'theater_km',                 'museum_km', 'exhibition_km', 'catering_km', 'price_doc')
+
+corrplot(cor(train[, ..cult_chars], use='complete.obs'))
+```
+Let's look at sport_objects.
+
+```{r}
+train %>% 
+    group_by(sub_area) %>% 
+    summarize(sport_objects=mean(sport_objects_raion), med_price=median(price_doc)) %>%
+    ggplot(aes(x=sport_objects, y=med_price)) +
+    geom_point(color='grey') + 
+    geom_smooth(method='lm', color='chocolate1') + 
+    ggtitle('Median Raion home price by # of sports objects in Raion')
+```
+There is definitely a positive correlation. This could be a good candidate feature to include in a model.
+```{r}
+train %>% 
+    group_by(sub_area) %>% 
+    summarize(culture_objects=mean(culture_objects_top_25_raion), med_price=median(price_doc)) %>%
+    ggplot(aes(x=culture_objects, y=med_price)) +
+    geom_point(color='grey') + 
+    geom_smooth(method='lm', color='coral2') + 
+    ggtitle('Median raion home price by # of culture objects in raion')
+```
+We can't get much information out of this due to the large number of raions that have zero culture objects. What if we just see if there is a difference between raions with and raions without a top 25 culture object.
+```{r}
+train %>% group_by(culture_objects_top_25) %>% 
+    summarize(med_price=median(price_doc)) 
+```
+How is the distance to the nearest park related to home price
+```{r}
+ggplot(aes(x=park_km, y=price_doc), data=train) + 
+    geom_point(color='deeppink1', alpha=0.4) + 
+    geom_smooth(method='lm', color='grey') +
+    ggtitle('Home price by distance to nearest park')
+```
+Infrastructure Features
+```{r}
+inf_features <- c('nuclear_reactor_km', 'thermal_power_plant_km', 'power_transmission_line_km',
+                  'incineration_km','water_treatment_km', 'incineration_km', 'railroad_station_walk_km',                   'railroad_station_walk_min', 'railroad_station_avto_km', 'railroad_station_avto_min',                    'public_transport_station_km', 'public_transport_station_min_walk', 'water_km',                          'mkad_km', 'ttk_km', 'sadovoe_km','bulvar_ring_km', 'kremlin_km', 'price_doc')
+
+corrplot(cor(train[, ..inf_features], use='complete.obs'))
+```
+```{r}
+ggplot(aes(x=kremlin_km, y=price_doc), data=train) +
+    geom_point(color='grey') + 
+    geom_smooth(method='lm', color='hotpink4') +
+    ggtitle('Home price by distance to Kremlin')
+```
+Test Data
+
+```{r}
+test <- fread("file:///C:/Users/Administrator/Desktop/Kaggle/pucho1/test.csv")
+```
+Missing Data
+First of all, let's see how much of the test data is missing.
+```{r}
+miss_value1=sort(colSums(is.na(test)))
+miss_value1 <- miss_value[miss_value>0]
+
+data.frame(miss=miss_value1, var=names(miss_value1), row.names=NULL) %>%
+    ggplot(aes(x=reorder(var, -miss), y=miss)) + 
+    geom_bar(stat='identity', fill='tomato3') +
+    labs(x='', y='% missing', title='Percent missing data by feature') +
+    theme(axis.text.x=element_text(angle=90, hjust=1))
+```
+
+
+```{r}
+# remove price_doc from dtrain
+train <- train %>% 
+    select(-price_doc) %>%
+    mutate(dataset='train')
+
+test <- test %>% 
+    mutate(dataset='test', timestamp=as.Date(timestamp))
+
+all_data <- bind_rows(train, test)
+```
+Internal Home Features
+
+```{r}
+all_data %>%
+    ggplot(aes(x=full_sq)) +
+    geom_density(color='yellow2', fill='springgreen4', alpha=0.7) +
+    facet_wrap(~as.factor(dataset)) +
+    scale_x_continuous(trans='log') +
+    ggtitle('Distribution of full_sq')
+```
+```{r}
+all_data %>%
+    ggplot(aes(x=life_sq)) +
+    geom_density(color='red', fill='slateblue3', alpha=0.7) +
+    facet_wrap(~as.factor(dataset)) +
+    scale_x_continuous(trans='log') +
+    ggtitle('Distribution of life_sq')
+```
+```{r}
+all_data %>%
+    ggplot(aes(x=kitch_sq)) +
+    geom_density(color='slategray1', fill='violetred2', alpha=0.7) +
+    facet_wrap(~as.factor(dataset)) +
+    scale_x_continuous(trans='log') +
+    ggtitle('Distribution of kitch_sq')
+```
+It seems that the distributions of the three area features are distributing similarly between the train and test sets. What about the number of rooms
+```{r}
+all_data %>% 
+    ggplot(aes(x=num_room)) + 
+    geom_histogram(fill='red') + 
+    facet_wrap(~dataset) + 
+    ggtitle('Distribution of number of rooms')
+```
+ floor and max_floor
+ 
+```{r}
+all_data %>%
+    ggplot(aes(x=floor)) +
+    geom_density(color='red', fill='red') + 
+    facet_wrap(~dataset)
+```
+```{r}
+all_data %>%
+    ggplot(aes(x=max_floor)) +
+    geom_density(color='red', fill='red') + 
+    facet_wrap(~dataset)
+```
+the floor and max_floor data to check where floor is greater than max_floor.
+```{r}
+all_data %>% 
+    ggplot(aes(x=floor, y=max_floor)) +
+    geom_point(color='steelblue') + 
+    geom_abline(intercept=0, slope=1, color='darkgrey') + 
+    facet_wrap(~dataset) + 
+    ggtitle('Max floor by floor')
+```
+Number of transactions by day
+```{r}
+all_data %>%
+    ggplot(aes(x=timestamp, fill=dataset, color=dataset)) + 
+    geom_bar(alpha=0.7) + 
+    scale_fill_manual(values=c('red', 'darkgrey')) + 
+    scale_color_manual(values=c('red', 'darkgrey')) + 
+    ggtitle('Number of transactions by day')
+```
+There does not appear to be any major discrepancy between the distributions of the daily transaction counts between test and train.
+```{r}
+ggplot(aes(x=product_type),data=all_data) + 
+    geom_bar(fill='steelblue1') + 
+    facet_grid(~dataset)
+```
+ales counts vary by home state across the train and test sets
+```{r}
+all_data %>% 
+    ggplot(aes(x=as.factor(state), fill=as.factor(state))) + 
+    geom_bar() + 
+    facet_wrap(~dataset) + 
+    ggtitle('Distribution of state')
+```
+the train set has a much higher proportion of missing data for this feature than does the test set.
+```{r}
+all_data %>% 
+    ggplot(aes(x=as.factor(material), fill=as.factor(material))) + 
+    geom_bar() + 
+    facet_wrap(~dataset) + 
+    ggtitle('Distribution of material')
+```
+The distributions of material seem mostly evenly distributed across test and train. The exception is the NAs. train.csv has a large number of missing values whereas test does not
